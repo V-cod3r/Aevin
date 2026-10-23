@@ -39,6 +39,31 @@ const Star = ({ size = 18, pulse = false }) => (
   </svg>
 );
 
+// Shrink photos before upload: faster, cheaper, and plenty sharp for Aevin to look at.
+async function shrink(file, max = 1280) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * scale);
+  c.height = Math.round(bmp.height * scale);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.82));
+  if (!blob) throw new Error("Could not read that image");
+  return blob;
+}
+
+function ChatImage({ path, local }) {
+  const [url, setUrl] = useState(local || null);
+  useEffect(() => {
+    if (local || !path) return;
+    let live = true;
+    supabase.storage.from("aevin-images").createSignedUrl(path, 3600)
+      .then(({ data }) => { if (live && data?.signedUrl) setUrl(data.signedUrl); });
+    return () => { live = false; };
+  }, [path, local]);
+  return url ? <img className="photo" src={url} alt="A picture you sent" loading="lazy" /> : <div className="photo ph" />;
+}
+
 function Login({ theme, onToggle }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -75,19 +100,22 @@ function Chat({ session, theme, onToggle }) {
   const [mode, setMode] = useState("steady");
   const [overlay, setOverlay] = useState(null);
   const [tray, setTray] = useState(false);
+  const [pending, setPending] = useState(null); // a photo waiting to be sent
+  const fileRef = useRef(null);
   const endRef = useRef(null);
   const celebrate = (kind) => kind && setOverlay({ kind, key: Date.now() });
 
   async function load() {
-    let { data, error } = await supabase
-      .from("messages")
-      .select("id,role,content,source,gesture,created_at")
-      .order("created_at", { ascending: false })
-      .limit(60);
-    if (error) {
-      // Older database without the gestures column: still show the chat.
-      ({ data } = await supabase.from("messages").select("id,role,content,source,created_at")
-        .order("created_at", { ascending: false }).limit(60));
+    // Try the newest column set first, then older ones, so the chat still shows
+    // if a database migration hasn't been run yet.
+    let data = null;
+    for (const cols of [
+      "id,role,content,source,gesture,image_path,created_at",
+      "id,role,content,source,gesture,created_at",
+      "id,role,content,source,created_at",
+    ]) {
+      const res = await supabase.from("messages").select(cols).order("created_at", { ascending: false }).limit(60);
+      if (!res.error) { data = res.data; break; }
     }
     const rows = (data ?? []).reverse();
     setMsgs(rows);
@@ -116,13 +144,27 @@ function Chat({ session, theme, onToggle }) {
   async function send(e, gift) {
     e?.preventDefault();
     const message = gift ? gift.text : text.trim();
-    if (!message || thinking) return;
-    if (!gift) setText("");
+    const photo = gift ? null : pending;
+    if ((!message && !photo) || thinking) return;
+    if (!gift) { setText(""); setPending(null); }
     setTray(false);
-    setMsgs((m) => [...m, { id: `tmp-${Date.now()}`, role: "user", content: message, gesture: gift?.id }]);
+    setMsgs((m) => [...m, { id: `tmp-${Date.now()}`, role: "user", content: message, gesture: gift?.id, local: photo?.url }]);
     if (gift) celebrate(gift.id);
     setThinking(true);
-    const { data, error } = await supabase.functions.invoke("chat", { body: { message, gesture: gift?.id } });
+
+    let image_path;
+    if (photo) {
+      const path = `${session.user.id}/${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage.from("aevin-images").upload(path, photo.blob, { contentType: "image/jpeg" });
+      if (upErr) {
+        console.error("upload failed:", upErr.message);
+        setMsgs((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", failed: true, content: "I couldn't get that picture. Try again?", detail: upErr.message }]);
+        setThinking(false);
+        return;
+      }
+      image_path = path;
+    }
+    const { data, error } = await supabase.functions.invoke("chat", { body: { message, gesture: gift?.id, image_path } });
     if (error || data?.error) {
       let detail = data?.detail || "";
       if (error?.context?.text) {
@@ -144,6 +186,18 @@ function Chat({ session, theme, onToggle }) {
     setThinking(false);
   }
 
+  async function pick(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const blob = await shrink(file);
+      setPending((old) => { if (old) URL.revokeObjectURL(old.url); return { blob, url: URL.createObjectURL(blob) }; });
+    } catch (err) {
+      setMsgs((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", failed: true, content: "I couldn't open that picture. Could you try a different one?", detail: String(err.message ?? err) }]);
+    }
+  }
+
   return (
     <div className="chat" data-mode={mode}>
       {overlay && <Overlay key={overlay.key} kind={overlay.kind} onDone={() => setOverlay(null)} />}
@@ -161,6 +215,7 @@ function Chat({ session, theme, onToggle }) {
         )}
         {msgs.map((m) => (
           <div key={m.id} className={`bubble ${m.role === "user" ? "me" : "aevin"} ${m.gesture === "letter" ? "letter" : ""}`}>
+            {(m.image_path || m.local) && <ChatImage path={m.image_path} local={m.local} />}
             {m.gesture && m.gesture !== "letter" && <GestureCard kind={m.gesture} mine={m.role === "user"} />}
             {m.gesture === "letter" ? <span className="seal"><Star size={12} /></span> : null}
             {m.content}
@@ -180,9 +235,21 @@ function Chat({ session, theme, onToggle }) {
           ))}
         </div>
       )}
+      {pending && (
+        <div className="pending">
+          <img src={pending.url} alt="Picture ready to send" />
+          <button type="button" onClick={() => setPending(null)} aria-label="Remove picture">×</button>
+        </div>
+      )}
+      <input ref={fileRef} type="file" accept="image/*" hidden onChange={pick} />
       <form className="composer" onSubmit={send}>
         <button type="button" className="gift" onClick={() => setTray((t) => !t)} aria-label="Send Aevin something" aria-expanded={tray}>
           <Star size={18} />
+        </button>
+        <button type="button" className="gift" onClick={() => fileRef.current?.click()} disabled={thinking} aria-label="Send Aevin a picture">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4.5" width="18" height="15" rx="3" /><circle cx="9" cy="10" r="1.8" /><path d="M21 16l-5-5-8 8" />
+          </svg>
         </button>
         <textarea
           rows={1}
@@ -191,7 +258,7 @@ function Chat({ session, theme, onToggle }) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) send(e); }}
         />
-        <button disabled={!text.trim() || thinking} aria-label="Send">➤</button>
+        <button disabled={(!text.trim() && !pending) || thinking} aria-label="Send">➤</button>
       </form>
     </div>
   );

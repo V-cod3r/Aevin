@@ -31,6 +31,7 @@ export type Context = {
   wins: string[];
   episodes: string[];
   threads: string[];
+  hasImage?: boolean;
   careNote?: string | null;
   careNoteAt?: string | null;
   ignoredNudges: number;
@@ -68,7 +69,7 @@ ${list(c.threads, "(none)")}
 - Last care note: ${c.careNote ? `${c.careNote} (${c.careNoteAt ?? "unknown time"})` : "none"}
 - Nudges she brushed off recently: ${c.ignoredNudges}
 
-## Output format
+${c.hasImage ? "## This message\nShe attached an image. Look at it closely and respond to what you actually see.\n\n" : ""}## Output format
 Reply with ONLY a JSON object, no prose around it:
 {"mode": "<one of: ${MODES.join(", ")}>", "intensity": <1-3>, "reply": "<your message>", "new_facts": ["<durable facts she told you in THIS message>"], "new_wins": ["<things she made, finished, or did well, that she mentioned in THIS message>"], "new_threads": ["<follow-ups worth raising later>"], "care_note": "<short note if she mentioned eating, sleep, or rest, else empty>", "gesture": "<none, or one of: ${GESTURES.join(", ")}>"}
 Only include things she actually said. Never guess. Use empty arrays when there is nothing.`;

@@ -5,6 +5,13 @@ import { generate, embed } from "../_shared/llm.ts";
 import { buildSystem, crisisCheck, CRISIS_REPLY, parseReply, GESTURES } from "../_shared/brain.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// Base64 without blowing the call stack on big images.
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
@@ -23,18 +30,21 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const message = String(body.message ?? "").trim().slice(0, 4000);
-  if (!message) return json({ error: "Empty message" }, 400);
+  // An image must live in this user's own folder of the aevin-images bucket.
+  const imagePath = typeof body.image_path === "string" && body.image_path.startsWith(`${userId}/`) && !body.image_path.includes("..")
+    ? body.image_path : null;
+  if (!message && !imagePath) return json({ error: "Empty message" }, 400);
 
   // A gift from her (flowers, stars...) arrives as a gesture name alongside the message text.
   const userGesture = (GESTURES as readonly string[]).includes(body.gesture) ? String(body.gesture) : null;
 
   const db = adminClient();
-  const save = (role: "user" | "assistant", content: string, gesture: string | null = null) =>
-    db.from("messages").insert({ user_id: userId, role, content, ...(gesture ? { gesture } : {}) });
+  const save = (role: "user" | "assistant", content: string, gesture: string | null = null, image: string | null = null) =>
+    db.from("messages").insert({ user_id: userId, role, content, ...(gesture ? { gesture } : {}), ...(image ? { image_path: image } : {}) });
 
   // Safety first, before any model call.
   if (crisisCheck(message)) {
-    await save("user", message, userGesture);
+    await save("user", message, userGesture, imagePath);
     await save("assistant", CRISIS_REPLY);
     await db.from("companion_state").update({ last_contact_at: new Date().toISOString(), ignored_nudges: 0 }).eq("user_id", userId);
     return json({ reply: CRISIS_REPLY, mode: "ground", crisis: true });
@@ -44,7 +54,7 @@ Deno.serve(async (req) => {
     const [{ data: profile }, { data: state }, { data: recent }, { data: threads }, { data: core }] = await Promise.all([
       db.from("profiles").select("display_name,timezone").eq("id", userId).single(),
       db.from("companion_state").select("*").eq("user_id", userId).single(),
-      db.from("messages").select("role,content").eq("user_id", userId).order("created_at", { ascending: false }).limit(14),
+      db.from("messages").select("role,content,image_path").eq("user_id", userId).order("created_at", { ascending: false }).limit(14),
       db.from("threads").select("description").eq("user_id", userId).eq("status", "open").order("created_at", { ascending: false }).limit(5),
       db.from("memories").select("kind,content").eq("user_id", userId).in("kind", ["fact", "preference", "win"])
         .order("importance", { ascending: false }).order("created_at", { ascending: false }).limit(25),
@@ -53,6 +63,7 @@ Deno.serve(async (req) => {
     // Relevant older moments via vector search (best effort; chat still works if it fails).
     let episodes: string[] = [];
     try {
+      if (!message) throw new Error("no text to search with");
       const qv = await embed(message, "RETRIEVAL_QUERY");
       const { data: hits } = await db.rpc("match_memories", { query_embedding: qv, match_user: userId, match_count: 5 });
       episodes = (hits ?? []).filter((h: any) => h.similarity > 0.55).map((h: any) => h.content);
@@ -68,12 +79,26 @@ Deno.serve(async (req) => {
       careNote: state?.last_care_note, careNoteAt: state?.last_care_note_at,
       ignoredNudges: state?.ignored_nudges ?? 0,
       summary: state?.summary,
+      hasImage: !!imagePath,
     });
 
-    const history = (recent ?? []).reverse().map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
-    await save("user", message, userGesture); // keep her words even if the model call fails
+    const history = (recent ?? []).reverse().map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: `${m.content}${m.image_path ? " [she sent an image]" : ""}`.trim(),
+    }));
+
+    let image: { mime: string; data: string } | undefined;
+    if (imagePath) {
+      const { data: blob, error: dlErr } = await db.storage.from("aevin-images").download(imagePath);
+      if (dlErr || !blob) throw new Error(`Could not read the image: ${dlErr?.message ?? "missing"}`);
+      if (blob.size > 4_000_000) throw new Error("Image is too large");
+      const mime = blob.type && blob.type.startsWith("image/") ? blob.type : "image/jpeg";
+      image = { mime, data: toBase64(new Uint8Array(await blob.arrayBuffer())) };
+    }
+
+    await save("user", message, userGesture, imagePath); // keep her words even if the model call fails
     const raw = await generate({
-      system, turns: [...history, { role: "user", content: message }], json: true, temperature: 1.0, maxTokens: 700,
+      system, turns: [...history, { role: "user", content: message, image }], json: true, temperature: 1.0, maxTokens: 700,
     });
     const out = parseReply(raw);
 

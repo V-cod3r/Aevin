@@ -28,7 +28,11 @@ const apiKey = () => {
   return k;
 };
 
-export type Turn = { role: "user" | "assistant"; content: string };
+export type Turn = {
+  role: "user" | "assistant";
+  content: string;
+  image?: { mime: string; data: string }; // base64, only sent with the newest message
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -59,15 +63,19 @@ async function post(url: string, body: unknown, attempts = 2): Promise<any> {
 
 /** Turn a chat history into Gemini's alternating user/model format. */
 function toContents(turns: Turn[]) {
-  const merged: { role: "user" | "model"; text: string }[] = [];
+  const merged: { role: "user" | "model"; parts: any[] }[] = [];
   for (const t of turns) {
     const role = t.role === "assistant" ? "model" : "user";
+    const parts: any[] = [];
+    if (t.image) parts.push({ inlineData: { mimeType: t.image.mime, data: t.image.data } });
+    if (t.content) parts.push({ text: t.content });
+    if (!parts.length) continue;
     const last = merged[merged.length - 1];
-    if (last && last.role === role) last.text += "\n" + t.content;
-    else merged.push({ role, text: t.content });
+    if (last && last.role === role) last.parts.push(...parts);
+    else merged.push({ role, parts });
   }
   while (merged.length && merged[0].role === "model") merged.shift(); // must start with the user
-  return merged.map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
+  return merged;
 }
 
 export async function generate(opts: {
