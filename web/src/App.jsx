@@ -54,14 +54,23 @@ async function shrink(file, max = 1280) {
 
 function ChatImage({ path, local }) {
   const [url, setUrl] = useState(local || null);
+  const [failed, setFailed] = useState("");
   useEffect(() => {
     if (local || !path) return;
     let live = true;
-    supabase.storage.from("aevin-images").createSignedUrl(path, 3600)
-      .then(({ data }) => { if (live && data?.signedUrl) setUrl(data.signedUrl); });
+    supabase.storage.from("aevin-images").createSignedUrl(path, 3600).then(({ data, error }) => {
+      if (!live) return;
+      if (data?.signedUrl) setUrl(data.signedUrl);
+      else setFailed(error?.message || "no link returned");
+    });
     return () => { live = false; };
   }, [path, local]);
-  return url ? <img className="photo" src={url} alt="A picture you sent" loading="lazy" /> : <div className="photo ph" />;
+  if (url) {
+    return <img className="photo" src={url} alt="A picture you sent" loading="lazy"
+      onError={() => { setUrl(null); setFailed("the picture file could not be opened"); }} />;
+  }
+  if (failed) return <div className="photo missing">Picture unavailable<small>{failed}</small></div>;
+  return <div className="photo ph" />;
 }
 
 function Login({ theme, onToggle }) {
@@ -101,6 +110,7 @@ function Chat({ session, theme, onToggle }) {
   const [overlay, setOverlay] = useState(null);
   const [pending, setPending] = useState(null); // a photo waiting to be sent
   const fileRef = useRef(null);
+  const localUrls = useRef({}); // pictures sent this session stay visible without a round trip
   const endRef = useRef(null);
   const celebrate = (kind) => kind && setOverlay({ kind, key: Date.now() });
 
@@ -161,6 +171,7 @@ function Chat({ session, theme, onToggle }) {
         return;
       }
       image_path = path;
+      localUrls.current[path] = photo.url;
     }
     const { data, error } = await supabase.functions.invoke("chat", { body: { message, gesture: gift?.id, image_path } });
     if (error || data?.error) {
@@ -213,7 +224,7 @@ function Chat({ session, theme, onToggle }) {
         )}
         {msgs.map((m) => (
           <div key={m.id} className={`bubble ${m.role === "user" ? "me" : "aevin"} ${m.gesture === "letter" ? "letter" : ""}`}>
-            {(m.image_path || m.local) && <ChatImage path={m.image_path} local={m.local} />}
+            {(m.image_path || m.local) && <ChatImage path={m.image_path} local={m.local || localUrls.current[m.image_path]} />}
             {m.gesture && m.gesture !== "letter" && <GestureCard kind={m.gesture} mine={m.role === "user"} />}
             {m.gesture === "letter" ? <span className="seal"><Star size={12} /></span> : null}
             {m.content}

@@ -156,3 +156,6 @@ header {
   position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 50%; border: 0;
   background: var(--ink); color: var(--bg); font-size: 15px; line-height: 1; cursor: pointer;
 }
+.photo.ph, .photo.missing { width: 220px; }
+.photo.missing { height: auto; padding: 18px 12px; text-align: center; font-size: 13px; background: var(--panel); border: 1px dashed var(--silver); color: var(--muted); }
+.photo.missing small { display: block; margin-top: 6px; font-family: ui-monospace, monospace; font-size: 11px; word-break: break-word; }
