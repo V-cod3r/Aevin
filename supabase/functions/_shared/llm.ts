@@ -104,15 +104,18 @@ export async function generate(opts: {
   for (const m of modelChain()) {
     // Keep Aevin quick: low thinking on 3.x, none on 2.5. If the field is refused, retry without it.
     const thinking = /gemini-2\.5-flash$/.test(m) ? { thinkingBudget: 0 } : /gemini-3/.test(m) ? { thinkingLevel: "low" } : null;
+    const t0 = Date.now();
     try {
       const text = await call(m, thinking).catch(async (e) => {
         if (thinking && (e as any)?.status === 400) return await call(m, null);
         throw e;
       });
       workingModel = m;
+      console.log(`gemini ok: ${m} in ${Date.now() - t0}ms`);
       return text;
     } catch (e) {
       const status = (e as any)?.status;
+      console.log(`gemini failed: ${m} after ${Date.now() - t0}ms (${(e as any)?.status ?? "?"})`);
       failures.push(`${m}: ${String((e as Error).message).slice(0, 160)}`);
       // Wrong/retired model, no access, bad request, quota, or overload: try the next model.
       if (status === 0 || [400, 403, 404, 429, 500, 503].includes(status)) continue;
