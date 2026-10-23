@@ -104,9 +104,19 @@ function Chat({ session, theme, onToggle }) {
     setText("");
     setMsgs((m) => [...m, { id: `tmp-${Date.now()}`, role: "user", content: message }]);
     setThinking(true);
-    const { error } = await supabase.functions.invoke("chat", { body: { message } });
-    if (error) {
-      setMsgs((m) => [...m, { id: `err-${Date.now()}`, role: "assistant", content: "I couldn't reach my thoughts just now. Try again in a moment?" }]);
+    const { data, error } = await supabase.functions.invoke("chat", { body: { message } });
+    if (error || data?.error) {
+      let detail = data?.detail || "";
+      if (error?.context?.text) {
+        try { detail = (await error.context.text()).slice(0, 300); } catch (e) { /* ignore */ }
+      }
+      detail = detail || error?.message || "";
+      console.error("chat failed:", detail);
+      setMsgs((m) => [...m, {
+        id: `err-${Date.now()}`, role: "assistant", failed: true,
+        content: data?.reply || "I couldn't reach my thoughts just now. Try again in a moment?",
+        detail,
+      }]);
     } else {
       await load();
     }
@@ -128,7 +138,10 @@ function Chat({ session, theme, onToggle }) {
           <p className="empty">Say hello. I'm listening.</p>
         )}
         {msgs.map((m) => (
-          <div key={m.id} className={`bubble ${m.role === "user" ? "me" : "aevin"}`}>{m.content}</div>
+          <div key={m.id} className={`bubble ${m.role === "user" ? "me" : "aevin"}`}>
+            {m.content}
+            {m.detail && <div className="note">{m.detail}</div>}
+          </div>
         ))}
         {thinking && (
           <div className="bubble aevin typing"><Star size={14} pulse /></div>

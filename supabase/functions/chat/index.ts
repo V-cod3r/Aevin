@@ -68,12 +68,12 @@ Deno.serve(async (req) => {
     });
 
     const history = (recent ?? []).reverse().map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+    await save("user", message); // keep her words even if the model call fails
     const raw = await generate({
       system, turns: [...history, { role: "user", content: message }], json: true, temperature: 1.0, maxTokens: 700,
     });
     const out = parseReply(raw);
 
-    await save("user", message);
     await save("assistant", out.reply);
 
     // Remember what she actually said (embeddings are best effort).
@@ -99,6 +99,7 @@ Deno.serve(async (req) => {
     return json({ reply: out.reply, mode: out.mode });
   } catch (e) {
     console.error(e);
-    return json({ reply: "My thoughts got tangled for a moment. Try me again in a minute?", mode: "steady", error: true });
+    const detail = String((e as Error)?.message ?? e).slice(0, 300);
+    return json({ reply: "My thoughts got tangled for a moment. Try me again in a minute?", mode: "steady", error: true, detail });
   }
 });
