@@ -1,13 +1,44 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
 
+function useTheme() {
+  const read = () => document.documentElement.dataset.theme || "light";
+  const [theme, setTheme] = useState(read);
+  function toggle() {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", next === "dark" ? "#0d0f1c" : "#eef0fb");
+    try { localStorage.setItem("aevin-theme", next); } catch (e) {}
+    setTheme(next);
+  }
+  return [theme, toggle];
+}
+
+function ThemeToggle({ theme, onToggle, className = "" }) {
+  const dark = theme === "dark";
+  return (
+    <button type="button" className={`theme-toggle ${className}`} onClick={onToggle}
+      aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} title={dark ? "Light mode" : "Dark mode"}>
+      {dark ? (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" />
+        </svg>
+      ) : (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 const Star = ({ size = 18, pulse = false }) => (
   <svg className={pulse ? "star pulse" : "star"} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
     <path d="M12 1 L13.8 10.2 L23 12 L13.8 13.8 L12 23 L10.2 13.8 L1 12 L10.2 10.2 Z" fill="currentColor" />
   </svg>
 );
 
-function Login() {
+function Login({ theme, onToggle }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -24,6 +55,7 @@ function Login() {
 
   return (
     <main className="login">
+      <ThemeToggle theme={theme} onToggle={onToggle} className="floating" />
       <img className="logo" src="/aevin-logo.png" alt="Aevin" />
       <form onSubmit={submit}>
         <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required />
@@ -35,7 +67,7 @@ function Login() {
   );
 }
 
-function Chat({ session }) {
+function Chat({ session, theme, onToggle }) {
   const [msgs, setMsgs] = useState([]);
   const [text, setText] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -85,7 +117,10 @@ function Chat({ session }) {
     <div className="chat">
       <header>
         <div className="brand"><Star size={16} /><span>Aevin</span></div>
-        <button className="ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
+        <div className="actions">
+          <ThemeToggle theme={theme} onToggle={onToggle} />
+          <button className="ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
+        </div>
       </header>
 
       <section className="stream">
@@ -117,6 +152,7 @@ function Chat({ session }) {
 
 export default function App() {
   const [session, setSession] = useState(undefined);
+  const [theme, toggleTheme] = useTheme();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -125,5 +161,5 @@ export default function App() {
   }, []);
 
   if (session === undefined) return <div className="boot"><Star size={28} pulse /></div>;
-  return session ? <Chat session={session} /> : <Login />;
+  return session ? <Chat session={session} theme={theme} onToggle={toggleTheme} /> : <Login theme={theme} onToggle={toggleTheme} />;
 }
