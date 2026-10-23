@@ -87,19 +87,37 @@ Deno.serve(async (req) => {
       content: `${m.content}${m.image_path ? " [she sent an image]" : ""}`.trim(),
     }));
 
+    // A picture problem should become an honest reply, never silence.
     let image: { mime: string; data: string } | undefined;
+    let imageNote = "";
     if (imagePath) {
-      const { data: blob, error: dlErr } = await db.storage.from("aevin-images").download(imagePath);
-      if (dlErr || !blob) throw new Error(`Could not read the image: ${dlErr?.message ?? "missing"}`);
-      if (blob.size > 4_000_000) throw new Error("Image is too large");
-      const mime = blob.type && blob.type.startsWith("image/") ? blob.type : "image/jpeg";
-      image = { mime, data: toBase64(new Uint8Array(await blob.arrayBuffer())) };
+      try {
+        const { data: blob, error: dlErr } = await db.storage.from("aevin-images").download(imagePath);
+        if (dlErr || !blob) throw new Error(`could not read it from storage (${dlErr?.message ?? "missing"})`);
+        if (blob.size > 4_000_000) throw new Error("the picture is too large");
+        const mime = blob.type && blob.type.startsWith("image/") ? blob.type : "image/jpeg";
+        image = { mime, data: toBase64(new Uint8Array(await blob.arrayBuffer())) };
+      } catch (e) {
+        console.error("image load failed:", e);
+        imageNote = `[She sent a picture, but it did not come through: ${String((e as Error).message).slice(0, 120)}. Tell her honestly you could not see it and ask her to try again.]`;
+      }
     }
 
     await save("user", message, userGesture, imagePath); // keep her words even if the model call fails
-    const raw = await generate({
-      system, turns: [...history, { role: "user", content: message, image }], json: true, temperature: 1.0, maxTokens: 700,
-    });
+    const ask = (turn: { role: "user"; content: string; image?: { mime: string; data: string } }) =>
+      generate({ system, turns: [...history, turn], json: true, temperature: 1.0, maxTokens: 700 });
+    let raw: string;
+    try {
+      raw = await ask({ role: "user", content: [message, imageNote].filter(Boolean).join("\n"), image });
+    } catch (e) {
+      if (!image) throw e;
+      // The model could not handle the picture; answer honestly instead of failing.
+      console.error("generate with image failed:", e);
+      raw = await ask({
+        role: "user",
+        content: [message, "[She sent a picture, but the model could not process it. Tell her honestly you could not see it, and invite her to try again or describe it.]"].filter(Boolean).join("\n"),
+      });
+    }
     const out = parseReply(raw);
 
     await save("assistant", out.reply, out.gesture);
