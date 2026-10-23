@@ -2,7 +2,7 @@
 import { adminClient } from "../_shared/db.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { generate, embed } from "../_shared/llm.ts";
-import { buildSystem, crisisCheck, CRISIS_REPLY, parseReply } from "../_shared/brain.ts";
+import { buildSystem, crisisCheck, CRISIS_REPLY, parseReply, GESTURES } from "../_shared/brain.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const json = (body: unknown, status = 200) =>
@@ -25,13 +25,16 @@ Deno.serve(async (req) => {
   const message = String(body.message ?? "").trim().slice(0, 4000);
   if (!message) return json({ error: "Empty message" }, 400);
 
+  // A gift from her (flowers, stars...) arrives as a gesture name alongside the message text.
+  const userGesture = (GESTURES as readonly string[]).includes(body.gesture) ? String(body.gesture) : null;
+
   const db = adminClient();
-  const save = (role: "user" | "assistant", content: string) =>
-    db.from("messages").insert({ user_id: userId, role, content });
+  const save = (role: "user" | "assistant", content: string, gesture: string | null = null) =>
+    db.from("messages").insert({ user_id: userId, role, content, ...(gesture ? { gesture } : {}) });
 
   // Safety first, before any model call.
   if (crisisCheck(message)) {
-    await save("user", message);
+    await save("user", message, userGesture);
     await save("assistant", CRISIS_REPLY);
     await db.from("companion_state").update({ last_contact_at: new Date().toISOString(), ignored_nudges: 0 }).eq("user_id", userId);
     return json({ reply: CRISIS_REPLY, mode: "ground", crisis: true });
@@ -68,13 +71,13 @@ Deno.serve(async (req) => {
     });
 
     const history = (recent ?? []).reverse().map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
-    await save("user", message); // keep her words even if the model call fails
+    await save("user", message, userGesture); // keep her words even if the model call fails
     const raw = await generate({
       system, turns: [...history, { role: "user", content: message }], json: true, temperature: 1.0, maxTokens: 700,
     });
     const out = parseReply(raw);
 
-    await save("assistant", out.reply);
+    await save("assistant", out.reply, out.gesture);
 
     // Remember what she actually said (embeddings are best effort).
     const rows: any[] = [];
@@ -96,7 +99,7 @@ Deno.serve(async (req) => {
       ...(out.care_note ? { last_care_note: out.care_note, last_care_note_at: now } : {}),
     }).eq("user_id", userId);
 
-    return json({ reply: out.reply, mode: out.mode });
+    return json({ reply: out.reply, mode: out.mode, gesture: out.gesture });
   } catch (e) {
     console.error(e);
     const detail = String((e as Error)?.message ?? e).slice(0, 300);

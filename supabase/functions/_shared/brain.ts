@@ -4,6 +4,9 @@ import { PERSONA } from "./persona.ts";
 export const MODES = ["mischief", "mind", "romantic", "ground", "steady", "care"] as const;
 export type Mode = typeof MODES[number];
 
+export const GESTURES = ["flowers", "stars", "hug", "candle", "confetti", "letter"] as const;
+export type Gesture = typeof GESTURES[number];
+
 // Runs BEFORE the model so safety never depends on the model's mood. Broad on purpose.
 const CRISIS = [
   /\b(kill myself|end it all|end my life|suicid\w*|want to die|wanna die|don'?t want to (be here|live|exist))\b/i,
@@ -67,13 +70,14 @@ ${list(c.threads, "(none)")}
 
 ## Output format
 Reply with ONLY a JSON object, no prose around it:
-{"mode": "<one of: ${MODES.join(", ")}>", "intensity": <1-3>, "reply": "<your message>", "new_facts": ["<durable facts she told you in THIS message>"], "new_wins": ["<things she made, finished, or did well, that she mentioned in THIS message>"], "new_threads": ["<follow-ups worth raising later>"], "care_note": "<short note if she mentioned eating, sleep, or rest, else empty>"}
+{"mode": "<one of: ${MODES.join(", ")}>", "intensity": <1-3>, "reply": "<your message>", "new_facts": ["<durable facts she told you in THIS message>"], "new_wins": ["<things she made, finished, or did well, that she mentioned in THIS message>"], "new_threads": ["<follow-ups worth raising later>"], "care_note": "<short note if she mentioned eating, sleep, or rest, else empty>", "gesture": "<none, or one of: ${GESTURES.join(", ")}>"}
 Only include things she actually said. Never guess. Use empty arrays when there is nothing.`;
 }
 
 export type Parsed = {
   mode: Mode; intensity: number; reply: string;
   new_facts: string[]; new_wins: string[]; new_threads: string[]; care_note: string;
+  gesture: Gesture | null;
 };
 
 const strs = (x: unknown): string[] =>
@@ -91,12 +95,13 @@ export function parseReply(raw: string): Parsed {
       reply: o.reply.trim(),
       new_facts: strs(o.new_facts), new_wins: strs(o.new_wins), new_threads: strs(o.new_threads),
       care_note: typeof o.care_note === "string" ? o.care_note.trim().slice(0, 200) : "",
+      gesture: (GESTURES as readonly string[]).includes(o.gesture) ? o.gesture : null,
     };
   } catch {
     return {
       mode: "steady", intensity: 1,
       reply: cleaned && !cleaned.startsWith("{") ? cleaned : "I lost my words for a second. Say that again?",
-      new_facts: [], new_wins: [], new_threads: [], care_note: "",
+      new_facts: [], new_wins: [], new_threads: [], care_note: "", gesture: null,
     };
   }
 }

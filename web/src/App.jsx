@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
+import { GestureCard, Overlay, GIFTS } from "./gestures.jsx";
 
 function useTheme() {
   const read = () => document.documentElement.dataset.theme || "light";
@@ -71,25 +72,40 @@ function Chat({ session, theme, onToggle }) {
   const [msgs, setMsgs] = useState([]);
   const [text, setText] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [mode, setMode] = useState("steady");
+  const [overlay, setOverlay] = useState(null);
+  const [tray, setTray] = useState(false);
   const endRef = useRef(null);
+  const celebrate = (kind) => kind && setOverlay({ kind, key: Date.now() });
 
   async function load() {
-    const { data } = await supabase
+    let { data, error } = await supabase
       .from("messages")
-      .select("id,role,content,source,created_at")
+      .select("id,role,content,source,gesture,created_at")
       .order("created_at", { ascending: false })
       .limit(60);
-    setMsgs((data ?? []).reverse());
+    if (error) {
+      // Older database without the gestures column: still show the chat.
+      ({ data } = await supabase.from("messages").select("id,role,content,source,created_at")
+        .order("created_at", { ascending: false }).limit(60));
+    }
+    const rows = (data ?? []).reverse();
+    setMsgs(rows);
+    return rows;
   }
 
   useEffect(() => {
     load();
+    supabase.from("companion_state").select("last_mode").maybeSingle().then(({ data }) => data?.last_mode && setMode(data.last_mode));
     // Messages Aevin starts on its own show up live.
     const ch = supabase
       .channel("aevin-messages")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `user_id=eq.${session.user.id}` },
         (p) => {
-          if (p.new.source === "proactive") setMsgs((m) => (m.some((x) => x.id === p.new.id) ? m : [...m, p.new]));
+          if (p.new.source === "proactive") {
+            setMsgs((m) => (m.some((x) => x.id === p.new.id) ? m : [...m, p.new]));
+            celebrate(p.new.gesture);
+          }
         })
       .subscribe();
     return () => supabase.removeChannel(ch);
@@ -97,14 +113,16 @@ function Chat({ session, theme, onToggle }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, thinking]);
 
-  async function send(e) {
+  async function send(e, gift) {
     e?.preventDefault();
-    const message = text.trim();
+    const message = gift ? gift.text : text.trim();
     if (!message || thinking) return;
-    setText("");
-    setMsgs((m) => [...m, { id: `tmp-${Date.now()}`, role: "user", content: message }]);
+    if (!gift) setText("");
+    setTray(false);
+    setMsgs((m) => [...m, { id: `tmp-${Date.now()}`, role: "user", content: message, gesture: gift?.id }]);
+    if (gift) celebrate(gift.id);
     setThinking(true);
-    const { data, error } = await supabase.functions.invoke("chat", { body: { message } });
+    const { data, error } = await supabase.functions.invoke("chat", { body: { message, gesture: gift?.id } });
     if (error || data?.error) {
       let detail = data?.detail || "";
       if (error?.context?.text) {
@@ -118,15 +136,19 @@ function Chat({ session, theme, onToggle }) {
         detail,
       }]);
     } else {
-      await load();
+      if (data?.mode) setMode(data.mode);
+      const rows = await load();
+      const last = rows[rows.length - 1];
+      if (last?.role === "assistant" && last.gesture) celebrate(last.gesture);
     }
     setThinking(false);
   }
 
   return (
-    <div className="chat">
+    <div className="chat" data-mode={mode}>
+      {overlay && <Overlay key={overlay.key} kind={overlay.kind} onDone={() => setOverlay(null)} />}
       <header>
-        <div className="brand"><Star size={16} /><span>Aevin</span></div>
+        <div className="brand"><Star size={16} pulse /><span>Aevin</span></div>
         <div className="actions">
           <ThemeToggle theme={theme} onToggle={onToggle} />
           <button className="ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
@@ -138,7 +160,9 @@ function Chat({ session, theme, onToggle }) {
           <p className="empty">Say hello. I'm listening.</p>
         )}
         {msgs.map((m) => (
-          <div key={m.id} className={`bubble ${m.role === "user" ? "me" : "aevin"}`}>
+          <div key={m.id} className={`bubble ${m.role === "user" ? "me" : "aevin"} ${m.gesture === "letter" ? "letter" : ""}`}>
+            {m.gesture && m.gesture !== "letter" && <GestureCard kind={m.gesture} mine={m.role === "user"} />}
+            {m.gesture === "letter" ? <span className="seal"><Star size={12} /></span> : null}
             {m.content}
             {m.detail && <div className="note">{m.detail}</div>}
           </div>
@@ -149,7 +173,17 @@ function Chat({ session, theme, onToggle }) {
         <div ref={endRef} />
       </section>
 
+      {tray && (
+        <div className="tray" role="menu">
+          {GIFTS.map((g) => (
+            <button key={g.id} type="button" onClick={() => send(null, g)} disabled={thinking}>{g.label}</button>
+          ))}
+        </div>
+      )}
       <form className="composer" onSubmit={send}>
+        <button type="button" className="gift" onClick={() => setTray((t) => !t)} aria-label="Send Aevin something" aria-expanded={tray}>
+          <Star size={18} />
+        </button>
         <textarea
           rows={1}
           value={text}
@@ -163,7 +197,30 @@ function Chat({ session, theme, onToggle }) {
   );
 }
 
+function Gallery() {
+  const [theme, toggle] = useTheme();
+  const [ov, setOv] = useState(null);
+  const kinds = ["flowers", "stars", "hug", "candle", "confetti"];
+  return (
+    <div className="chat" data-mode="romantic">
+      {ov && <Overlay key={ov.key} kind={ov.kind} onDone={() => setOv(null)} />}
+      <header><div className="brand"><Star size={16} pulse /><span>Gestures</span></div><ThemeToggle theme={theme} onToggle={toggle} /></header>
+      <section className="stream">
+        {kinds.map((k) => (
+          <div key={k} className="bubble aevin">
+            <GestureCard kind={k} />
+            <button className="ghost" onClick={() => setOv({ kind: k, key: Date.now() })}>play full-screen</button>
+          </div>
+        ))}
+        <div className="bubble aevin letter"><span className="seal"><Star size={12} /></span>For the nights you forget that you are already enough, I will hold the light a little longer.</div>
+        <div className="bubble me"><GestureCard kind="flowers" mine />*gives you a bouquet of flowers*</div>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
+  if (typeof location !== "undefined" && location.search.includes("gallery")) return <Gallery />;
   const [session, setSession] = useState(undefined);
   const [theme, toggleTheme] = useTheme();
 
