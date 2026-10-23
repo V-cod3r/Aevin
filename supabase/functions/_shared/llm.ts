@@ -16,10 +16,18 @@ const MODEL_CHAIN = [
   "gemini-2.5-flash",
 ];
 let workingModel: string | null = null; // remembered while this instance stays warm
+// Models that just failed (quota, retired, no access) sit out for a while instead of
+// costing a few seconds on every message.
+const cooldown = new Map<string, number>();
+const benchModel = (m: string, status: number | undefined) => {
+  const minutes = status === 429 ? 15 : status === 404 || status === 403 ? 360 : 2;
+  cooldown.set(m, Date.now() + minutes * 60_000);
+};
 const modelChain = () => {
   const first = Deno.env.get("GEMINI_MODEL");
-  const order = [first, workingModel, ...MODEL_CHAIN].filter((m): m is string => !!m);
-  return [...new Set(order)];
+  const order = [...new Set([first, workingModel, ...MODEL_CHAIN].filter((m): m is string => !!m))];
+  const ready = order.filter((m) => (cooldown.get(m) ?? 0) < Date.now());
+  return ready.length ? ready : order; // if everything is benched, try them all anyway
 };
 const embedModel = () => Deno.env.get("GEMINI_EMBED_MODEL") ?? "gemini-embedding-001";
 const apiKey = () => {
@@ -54,8 +62,8 @@ async function post(url: string, body: unknown, attempts = 2): Promise<any> {
     if (res.ok) return await res.json();
     const text = await res.text();
     lastErr = Object.assign(new Error(`LLM ${res.status}: ${text.slice(0, 300)}`), { status: res.status });
-    // Retry only on rate limits / temporary overload.
-    if (res.status !== 429 && res.status !== 503) break;
+    // Retry only on temporary overload. A 429 moves on to the next model right away.
+    if (res.status !== 503) break;
     await sleep(800 * (i + 1));
   }
   throw lastErr;
@@ -124,6 +132,7 @@ export async function generate(opts: {
     } catch (e) {
       const status = (e as any)?.status;
       console.log(`gemini failed: ${m} after ${Date.now() - t0}ms (${(e as any)?.status ?? "?"})`);
+      benchModel(m, status);
       failures.push(`${m}: ${String((e as Error).message).slice(0, 160)}`);
       // Wrong/retired model, no access, bad request, quota, or overload: try the next model.
       if (status === 0 || [400, 403, 404, 429, 500, 503].includes(status)) continue;
