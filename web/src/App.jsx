@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
-import { GestureCard, Overlay, GIFTS } from "./gestures.jsx";
+import { GestureCard, Overlay } from "./gestures.jsx";
 
 function useTheme() {
   const read = () => document.documentElement.dataset.theme || "light";
@@ -99,7 +99,6 @@ function Chat({ session, theme, onToggle }) {
   const [thinking, setThinking] = useState(false);
   const [mode, setMode] = useState("steady");
   const [overlay, setOverlay] = useState(null);
-  const [tray, setTray] = useState(false);
   const [pending, setPending] = useState(null); // a photo waiting to be sent
   const fileRef = useRef(null);
   const endRef = useRef(null);
@@ -147,7 +146,6 @@ function Chat({ session, theme, onToggle }) {
     const photo = gift ? null : pending;
     if ((!message && !photo) || thinking) return;
     if (!gift) { setText(""); setPending(null); }
-    setTray(false);
     setMsgs((m) => [...m, { id: `tmp-${Date.now()}`, role: "user", content: message, gesture: gift?.id, local: photo?.url }]);
     if (gift) celebrate(gift.id);
     setThinking(true);
@@ -228,13 +226,6 @@ function Chat({ session, theme, onToggle }) {
         <div ref={endRef} />
       </section>
 
-      {tray && (
-        <div className="tray" role="menu">
-          {GIFTS.map((g) => (
-            <button key={g.id} type="button" onClick={() => send(null, g)} disabled={thinking}>{g.label}</button>
-          ))}
-        </div>
-      )}
       {pending && (
         <div className="pending">
           <img src={pending.url} alt="Picture ready to send" />
@@ -243,9 +234,6 @@ function Chat({ session, theme, onToggle }) {
       )}
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={pick} />
       <form className="composer" onSubmit={send}>
-        <button type="button" className="gift" onClick={() => setTray((t) => !t)} aria-label="Send Aevin something" aria-expanded={tray}>
-          <Star size={18} />
-        </button>
         <button type="button" className="gift" onClick={() => fileRef.current?.click()} disabled={thinking} aria-label="Send Aevin a picture">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <rect x="3" y="4.5" width="18" height="15" rx="3" /><circle cx="9" cy="10" r="1.8" /><path d="M21 16l-5-5-8 8" />
