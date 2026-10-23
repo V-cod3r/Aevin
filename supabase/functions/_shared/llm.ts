@@ -32,14 +32,21 @@ export type Turn = { role: "user" | "assistant"; content: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function post(url: string, body: unknown, attempts = 3): Promise<any> {
+async function post(url: string, body: unknown, attempts = 2): Promise<any> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey() },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey() },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(25_000), // a stalled model should not hold up the fallback
+      });
+    } catch (e) {
+      // Timeout or network error: report as "overloaded" so the next model gets a turn.
+      throw Object.assign(new Error(`LLM timeout/network: ${String((e as Error).message).slice(0, 120)}`), { status: 503 });
+    }
     if (res.ok) return await res.json();
     const text = await res.text();
     lastErr = Object.assign(new Error(`LLM ${res.status}: ${text.slice(0, 300)}`), { status: res.status });
