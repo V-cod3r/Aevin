@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
+import Companion from "./Companion.jsx";
 
 function useTheme() {
   const read = () => document.documentElement.dataset.theme || "light";
@@ -63,6 +64,7 @@ function Login({ theme, onToggle }) {
         <button disabled={busy}>{busy ? "…" : "Come in"}</button>
         {err && <p className="err">{err}</p>}
       </form>
+      <Companion />
     </main>
   );
 }
@@ -159,6 +161,7 @@ function Chat({ session, theme, onToggle }) {
         />
         <button disabled={!text.trim() || thinking} aria-label="Send">➤</button>
       </form>
+      <Companion />
     </div>
   );
 }
